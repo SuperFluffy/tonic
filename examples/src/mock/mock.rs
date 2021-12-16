@@ -3,6 +3,10 @@ use tonic::{
     transport::{Endpoint, Server, Uri},
     Request, Response, Status,
 };
+use tokio::signal::unix::{
+    signal,
+    SignalKind,
+};
 use tower::service_fn;
 
 pub mod hello_world {
@@ -21,12 +25,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let greeter = MyGreeter::default();
 
+    let mut shutdown_signal = signal(SignalKind::terminate()).unwrap();
     tokio::spawn(async move {
         Server::builder()
             .add_service(GreeterServer::new(greeter))
-            .serve_with_incoming(futures::stream::iter(vec![Ok::<_, std::io::Error>(
-                mock::MockStream(server),
-            )]))
+            .serve_with_incoming_shutdown(
+                futures::stream::iter(vec![Ok::<_, std::io::Error>( mock::MockStream(server),)]),
+                async move {
+                    shutdown_signal.recv().await;
+                    println!("shutting down");
+                },
+            )
             .await
     });
 
@@ -35,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = Some(client);
     let channel = Endpoint::try_from("http://[::]:50051")?
         .connect_with_connector(service_fn(move |_: Uri| {
-            let client = client.take().unwrap();
+            let client = client.take().expect("tried accessing client twice");
 
             async move { Ok::<_, std::io::Error>(mock::MockStream(client)) }
         }))
